@@ -12,7 +12,6 @@ import operator
 try:
     import cv2
     import numpy as np
-    import matplotlib
     from matplotlib import pyplot as plt
 except ImportError as e:
     print(str(e) + '\nPlease install required packages with:\n  pip3 install opencv-python matplotlib numpy')
@@ -249,30 +248,26 @@ def extractTube(inputImage, contour, tubeId):
     print(f'* Found {len(topLevelContours)} top-level contours, {len(secondLevelContours)} sub-contours.')
 
     if args.plots:
-        with Figure(f'Tube {tubeId}: Graph-cuts input (red: sure background, green: sure foreground)'):
+        with Figure(f'Tube {tubeId}: Graph-cuts input labels'):
             renderMask = np.zeros((h, w, 3), np.uint8)
             renderMask[mask == cv2.GC_FGD] = (0, 200, 0)
             renderMask[mask == cv2.GC_BGD] = (255, 0, 0)
             render = cv2.addWeighted(tubeImage, 0.7, renderMask, 0.3, 0)
             plt.imshow(render)
-        with Figure(f'Tube {tubeId}: Graph-cuts output'):
+        with Figure(f'Tube {tubeId}: Graph-cuts filtered output'):
             renderMask = np.zeros((h, w, 3), np.uint8)
+            renderMask[outputMask == 1] = (0, 200, 0)
             renderMask[outputMask == 0] = (255, 0, 0)
             render = cv2.addWeighted(tubeImage, 0.7, renderMask, 0.3, 0)
             plt.imshow(render)
 
-        odCm = px2cm(outsideContour.equivalentDiamater())
-        idCm = px2cm(insideContour.equivalentDiamater())
-        opCm = px2cm(outsideContour.perimeter())
-        ipCm = px2cm(insideContour.perimeter())
-        with Figure(f'Tube {tubeId}: Final contours\n OD = {odCm:.1f} cm, OP = {opCm:.1f} cm\n ID = {idCm:.1f} cm, IP = {ipCm:.1f} cm'):
+        with Figure(f'Tube {tubeId}: Final contours'):
             render = tubeImage.copy()
             cv2.drawContours(render, [outsideContour.points], -1, (255, 0, 255), 3)
             cv2.drawContours(render, [insideContour.points], -1, (255, 255, 0), 3)
             plt.imshow(render)
 
     return (outsideContour, insideContour, tubeImage)
-
 
 def main():
     # Load image
@@ -316,7 +311,11 @@ def main():
     for tubeId, contour in enumerate(tubesContours):
         outsideContour, insideContour, tubeRectImage = extractTube(inputImage, contour, tubeId + 1)
 
-        with Figure(f'Tube {tubeId}'):
+        odCm = px2cm(outsideContour.equivalentDiamater())
+        idCm = px2cm(insideContour.equivalentDiamater())
+        solidPerc = (1 - insideContour.area()/outsideContour.area()) * 100
+
+        with Figure(f'Tube {tubeId + 1}:\n OD = {odCm:.1f} cm, ID = {idCm:.1f} cm, {int(solidPerc)}% solid.'):
             render = np.zeros_like(tubeRectImage)
             render[:, :, :] = (255, 255, 255)
             cv2.drawContours(render, [outsideContour.points, insideContour.points], -1, (0, 0, 0), 3)
