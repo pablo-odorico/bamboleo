@@ -29,6 +29,7 @@ def dpi2dpcm(dpi): return dpi * 0.393701
 def px2cm(pixels): return pixels / dpi2dpcm(args.dpi)
 def cm2px(cm): return cm * dpi2dpcm(args.dpi)
 
+# Plotting
 figureCount = 0
 class Figure:
     ''' Scope-based plotting util that will name and save figures in the output directory. '''
@@ -110,6 +111,7 @@ def contourMayBeHole(contour):
     '''
     minRectSide = cm2px(1.0)
     return contour.rect()[2] > minRectSide and contour.rect()[3] > minRectSide
+
 #
 # First stage: Image segmentation to find tube contours (two approaches)
 #
@@ -121,18 +123,22 @@ def findTopLevelContours1(grayscale):
     # Apply flood-fill on the black background
     # TODO: If a fixed seed causes problem iterate with random seed positions near the corners
     mask = np.zeros((height + 2, width + 2), np.uint8)
-    cv2.floodFill(grayscale, mask, (5, 5), 255, 1, 12, flags=4 | cv2.FLOODFILL_MASK_ONLY)
+    cv2.floodFill(grayscale, mask, (5, 5), 255, 2, 12, flags=4 | cv2.FLOODFILL_MASK_ONLY)
     # Crop mask to image size, invert to have 1 on the tubes and 0 on the background
     mask = mask[1:height+1, 1:width+1]
     mask = 1 - mask
 
     # Apply strong morphological opening to remove false-positives
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (16, 16))
     filteredMask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
 
     # Extract top-level contours and organize them in a list of Contour objects.
     _, contourArray, treeArray = cv2.findContours(filteredMask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = Contours(contourArray, treeArray)
+
+    # Make contours convex
+    for c in contours:
+        c.points = cv2.convexHull(c.points)
 
     if args.plots:
         with Figure('Background flood-fill mask'):
@@ -181,15 +187,14 @@ def findTopLevelContours2(grayscale):
     return contours
 
 def extractTube(inputImage, contour, tubeId):
-
     def scaledPoints(contour, k):
-        ''' Returns points of Contour scaled around its center. '''
+        ''' Returns .points of a Contour scaled around its center. '''
         center = np.array(contour.centroid())
         points = k * (contour.points - center) + center
         return points.astype(np.int32, copy=False)
 
     def scaledRect(rect, k, width, height):
-        ''' Scale rect maintaining center and clap to (0,0) to (width-1, height-1). '''
+        ''' Scale rect maintaining center and clamp to (0..width-1, 0..height-1). '''
         x, y, w, h = rect
         pos, size = np.array((x, y)), np.array((w, h))
         center = pos + size / 2
@@ -201,6 +206,7 @@ def extractTube(inputImage, contour, tubeId):
     print(f'* Processing tube {tubeId}...')
 
     # Scale the contour by 1.1x and to get a bounding rect that contains every tube pixel.
+    # TODO: If the contours are noise either filter them or use ellipses for this
     inputHeight, inputWidth = inputImage.shape[:2]
     x, y, w, h = scaledRect(contour.rect(), 1.1, inputWidth, inputHeight)
     # Crop the expanded rect tube
@@ -211,6 +217,7 @@ def extractTube(inputImage, contour, tubeId):
     mask = np.full((inputHeight, inputWidth), cv2.GC_BGD, np.uint8)
     hints = [
         (1.05, cv2.GC_PR_BGD),
+        (1.00, cv2.GC_PR_FGD),
         (0.90, cv2.GC_FGD),
         (0.80, cv2.GC_PR_BGD),
         (0.25, cv2.GC_BGD)
