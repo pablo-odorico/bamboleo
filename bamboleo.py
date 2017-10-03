@@ -84,33 +84,36 @@ class Contour:
         m = self.moments()
         return (m['m10'] / m['m00'], m['m01'] / m['m00'])
     def aspectRatio(self):
-        rect = self.rect()
-        return rect[2] / rect[3] # width / height
+        _, _, width, height = self.rect()
+        return width / height
     def equivalentDiamater(self):
         return np.sqrt(4 * self.area() / np.pi)
 
     def __repr__(self):
         return f'[rect: {self.rect()}, area: {self.area()} px]'
 
-def Contours(contourArray, treeArray):
+def getContours(contourArray, treeArray):
     ''' Create a list of Contour from the output of cv2.findContour '''
     return [Contour(contourArray[i], treeArray[0, i, :]) for i in range(len(contourArray))]
 
-def contourMayBeTube(contour):
+def contourMayBeTube(contour, minRectSideCm=2, maxAspectRatioError=0.3):
     '''
     Basic tube-ness test. Returns false when contour is for sure not a valid tube.
     TODO: Maybe check how well it fits an ellipse
     '''
-    minRectSide = cm2px(2.0)
-    return contour.rect()[2] > minRectSide and contour.rect()[3] > minRectSide
+    # Check aspect ratio
+    if not ((1 - maxAspectRatioError) < contour.aspectRatio() < (1 + maxAspectRatioError)):
+        return False
+
+    _, _, width, height = contour.rect()
+    return width > cm2px(minRectSideCm) and height > cm2px(minRectSideCm)
 
 def contourMayBeHole(contour):
     '''
     Basic hole-ness test. Returns false when contour is for sure not a valid tube hole.
     Use only on contours inside a contourMayBeTube() contour.
     '''
-    minRectSide = cm2px(1.0)
-    return contour.rect()[2] > minRectSide and contour.rect()[3] > minRectSide
+    return contourMayBeTube(contour, minRectSideCm=1)
 
 #
 # First stage: Image segmentation to find tube contours (two approaches)
@@ -134,7 +137,7 @@ def findTopLevelContours1(grayscale):
 
     # Extract top-level contours and organize them in a list of Contour objects.
     _, contourArray, treeArray = cv2.findContours(filteredMask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours = Contours(contourArray, treeArray)
+    contours = getContours(contourArray, treeArray)
 
     # Make contours convex
     for c in contours:
@@ -166,7 +169,7 @@ def findTopLevelContours2(grayscale):
 
     # Extract top-level contours and organize them in a list of Contour objects.
     _, contourArray, treeArray = cv2.findContours(filteredMask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours = Contours(contourArray, treeArray)
+    contours = getContours(contourArray, treeArray)
 
     if args.plots:
         with Figure('Luminance histogram'):
@@ -242,7 +245,7 @@ def extractTube(inputImage, contour, tubeId):
 
     # Extract full contour hierarchy from the output mask
     _, contourArray, treeArray = cv2.findContours(outputMask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    tubeContours = Contours(contourArray, treeArray)
+    tubeContours = getContours(contourArray, treeArray)
 
     # Find the largest top-level contour. This is the outside tube contour.
     topLevelContours = [c for c in tubeContours if c.treeNode[3] == -1]
@@ -267,7 +270,6 @@ def extractTube(inputImage, contour, tubeId):
             renderMask[outputMask == 0] = (255, 0, 0)
             render = cv2.addWeighted(tubeImage, 0.7, renderMask, 0.3, 0)
             plt.imshow(render)
-
         with Figure(f'Tube {tubeId}: Final contours'):
             render = tubeImage.copy()
             cv2.drawContours(render, [outsideContour.points], -1, (255, 0, 255), 3)
