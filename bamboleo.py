@@ -5,6 +5,7 @@
 
 import os
 import sys
+import json
 import argparse
 import operator
 
@@ -13,9 +14,11 @@ try:
     import cv2
     import numpy as np
     from matplotlib import pyplot as plt
+    from dxfwrite import DXFEngine as dxf, const as dxfconst
 except ImportError as e:
-    print(str(e) + '\nPlease install required packages with:\n  pip3 install opencv-python matplotlib numpy')
+    print(str(e) + '\nPlease install required packages with:\n  pip3 install opencv-python matplotlib numpy dxfwrite')
     sys.exit(1)
+
 
 # Global settings
 args = None
@@ -27,6 +30,7 @@ args = None
 # Units
 def dpi2dpcm(dpi): return dpi * 0.393701
 def px2cm(pixels): return pixels / dpi2dpcm(args.dpi)
+def px2mm(pixels): return 10 * px2cm(pixels)
 def cm2px(cm): return cm * dpi2dpcm(args.dpi)
 
 # Plotting
@@ -324,11 +328,38 @@ def main():
         idCm = px2cm(insideContour.equivalentDiamater())
         solidPerc = (1 - insideContour.area()/outsideContour.area()) * 100
 
+        # Save contour outline figure
         with Figure(f'Tube {tubeId + 1}:\n OD = {odCm:.1f} cm, ID = {idCm:.1f} cm, {int(solidPerc)}% solid.'):
             render = np.zeros_like(tubeRectImage)
             render[:, :, :] = (255, 255, 255)
             cv2.drawContours(render, [outsideContour.points, insideContour.points], -1, (0, 0, 0), 3)
             plt.imshow(render)
+
+        # Save contour JSON, all values are relative to the tube rectangle and not the original image coords
+        x0, y0, width, height = outsideContour.rect()
+        origin = np.array([x0, y0])
+        size = np.array([width, height])
+        outsidePointsMM = px2mm(np.squeeze(outsideContour.points) - origin - size/2.0).tolist()
+        insidePointsMM = px2mm(np.squeeze(insideContour.points) - origin - size/2.0).tolist()
+        jsonOut = {
+            'tubeId' : tubeId,
+            'units' : 'mm',
+            'width' : px2mm(width),
+            'height' : px2mm(height),
+            'outsideContour' : outsidePointsMM,
+            'insideContour' : insidePointsMM
+        }
+        jsonPath = os.path.join(args.output, f'tube_{tubeId}.json')
+        open(jsonPath, 'w').write(json.dumps(jsonOut, indent=4))
+
+        # Save contour DXF
+        dxfPath = os.path.join(args.output, f'tube_{tubeId}.dxf')
+        drawing = dxf.drawing(dxfPath)
+        drawing.header['$INSUNITS'] = 4 # Units are in mm
+        drawing.header['$MEASUREMENT'] = 1 # Do measurements in metric
+        drawing.add(dxf.polyline(points=outsidePointsMM, flags=dxfconst.POLYLINE_CLOSED))
+        drawing.add(dxf.polyline(points=insidePointsMM, flags=dxfconst.POLYLINE_CLOSED))
+        drawing.save()
 
 if __name__ == '__main__':
     # Parse command-line arguments
