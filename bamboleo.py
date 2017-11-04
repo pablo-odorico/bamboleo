@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
 # Required Python: Python 3.5+
-# Required packages: opencv-python matplotlib numpy
+# Required packages: See ImportError message below
 
 import os
 import sys
@@ -96,9 +96,17 @@ class Contour:
     def __repr__(self):
         return f'[rect: {self.rect()}, area: {self.area()} px]'
 
-def getContours(contourArray, treeArray):
-    ''' Create a list of Contour from the output of cv2.findContour '''
-    return [Contour(contourArray[i], treeArray[0, i, :]) for i in range(len(contourArray))]
+def getContours(contourArray, treeArray, epsilon=None):
+    '''
+    Create a list of Contour from the output of cv2.findContour
+    If epsilon is not None then it will be used to simplify the polygon.
+    '''
+    contours = [Contour(contourArray[i], treeArray[0, i, :]) for i in range(len(contourArray))]
+    if epsilon:
+        for c in contours:
+            e = epsilon * cv2.arcLength(c.points, True)
+            c.points = cv2.approxPolyDP(c.points, e, True)
+    return contours
 
 def contourMayBeTube(contour, minRectSideCm=2, maxAspectRatioError=0.3):
     '''
@@ -248,8 +256,9 @@ def extractTube(inputImage, contour, tubeId):
     outputMask = cv2.morphologyEx(outputMask, cv2.MORPH_OPEN, kernel, iterations=1)
 
     # Extract full contour hierarchy from the output mask
-    _, contourArray, treeArray = cv2.findContours(outputMask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    tubeContours = getContours(contourArray, treeArray)
+    # Use polygon approximation and simplify the final contours
+    _, contourArray, treeArray = cv2.findContours(outputMask, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS)
+    tubeContours = getContours(contourArray, treeArray, epsilon=0.0005)
 
     # Find the largest top-level contour. This is the outside tube contour.
     topLevelContours = [c for c in tubeContours if c.treeNode[3] == -1]
@@ -274,11 +283,15 @@ def extractTube(inputImage, contour, tubeId):
             renderMask[outputMask == 0] = (255, 0, 0)
             render = cv2.addWeighted(tubeImage, 0.7, renderMask, 0.3, 0)
             plt.imshow(render)
-        with Figure(f'Tube {tubeId}: Final contours'):
-            render = tubeImage.copy()
-            cv2.drawContours(render, [outsideContour.points], -1, (255, 0, 255), 3)
-            cv2.drawContours(render, [insideContour.points], -1, (255, 255, 0), 3)
-            plt.imshow(render)
+    # Plot final contour
+    odCm = px2cm(outsideContour.equivalentDiamater())
+    idCm = px2cm(insideContour.equivalentDiamater())
+    solidPerc = (outsideContour.area() - insideContour.area()) / outsideContour.area() * 100
+    with Figure(f'Tube {tubeId + 1}:\nOD = {odCm:.1f} cm, ID = {idCm:.1f} cm, {int(solidPerc)}% solid.'):
+        render = tubeImage.copy()
+        cv2.drawContours(render, [outsideContour.points], -1, (255, 0, 255), 2)
+        cv2.drawContours(render, [insideContour.points], -1, (255, 255, 0), 2)
+        plt.imshow(render)
 
     return (outsideContour, insideContour, tubeImage)
 
@@ -324,17 +337,6 @@ def main():
     for tubeId, contour in enumerate(tubesContours):
         outsideContour, insideContour, tubeRectImage = extractTube(inputImage, contour, tubeId + 1)
 
-        odCm = px2cm(outsideContour.equivalentDiamater())
-        idCm = px2cm(insideContour.equivalentDiamater())
-        solidPerc = (1 - insideContour.area()/outsideContour.area()) * 100
-
-        # Save contour outline figure
-        with Figure(f'Tube {tubeId + 1}:\n OD = {odCm:.1f} cm, ID = {idCm:.1f} cm, {int(solidPerc)}% solid.'):
-            render = np.zeros_like(tubeRectImage)
-            render[:, :, :] = (255, 255, 255)
-            cv2.drawContours(render, [outsideContour.points, insideContour.points], -1, (0, 0, 0), 3)
-            plt.imshow(render)
-
         # Save contour JSON, all values are relative to the tube rectangle and not the original image coords
         x0, y0, width, height = outsideContour.rect()
         origin = np.array([x0, y0])
@@ -366,13 +368,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('inputPath', help='image to process', metavar='image.jpg')
     parser.add_argument('dpi', help='image dots-per-inch', metavar='dpi', type=int)
-    parser.add_argument('--output', help='output directory', metavar=f'output{os.path.sep}', default='output')
+    parser.add_argument('--output', help='output directory', metavar=f'output{os.path.sep}', default=None)
     parser.add_argument('--plots', help='generate intermediate plots', action='store_true')
     args = parser.parse_args()
 
+    # Default output dir is the same as the file without the extension
+    args.output = args.output or os.path.splitext(args.inputPath)[0]
     # Get absolute path out output dir, create if it doesn't exist
     if not os.path.exists(args.output):
         os.makedirs(args.output)
-        print(f'Created output directory "{args.output}".')
+    print(f'Output directory is "{args.output}".')
 
     main()
