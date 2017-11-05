@@ -1,3 +1,5 @@
+![Sample image](https://github.com/pablo-odorico/bamboleo/blob/master/samples/bamboo_sample_400dpi.jpg)
+
 This sample was obtained by scanning the same bamboo cut on both sides and composing the crops in a single image.
 It is meant to test tube detection and contour detection.
 
