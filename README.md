@@ -1,7 +1,7 @@
-# bamboleo 🎍
-Set of tools for extracting bamboo tube cross-sections, which can later be used to generate 3D printed structural fittings.
+# 🎍 bamboleo
+Tools for extracting bamboo tube cross-sections, which can later be used to generate 3D printed structural fittings.
 
-## Pipeline overview
+## Image Pipeline Overview
 
 ### Input
 The user provides:
@@ -21,7 +21,7 @@ A [flood fill](https://en.wikipedia.org/wiki/Flood_fill) operation is performed 
 This mask is later filtered using [morphological](https://en.wikipedia.org/wiki/Opening_(morphology)) operations to remove noise, and the contours of the remaining islands are obtained. The islands are filtered based on some basic rules such as minimum tube size and aspect ratio. Finally the crop of each tube is sent to the next stage for processing. 
 <img src="doc/figure3.jpg" width="70%"><br>
 
-### Step 2: Extraction of the tube inside- and outside-contour
+### Step 2: Extraction of tube contours
 At this point each tube is processed independently.
 
 The [graph-cuts optimization algorithm](https://docs.opencv.org/trunk/d8/d83/tutorial_py_grabcut.html) is used to perform image segmentation, labeling the pixels of each crop as "tube" or "background".
@@ -40,4 +40,4 @@ On this output image the outside contours are drawn in purple while the inside c
 
 At this point it is possible to obtain metrics of each cross section, including diameters, perimeter, solidity, aspect ratio, etc.
 
-The final contours are experted as [AutoCAD DXF](https://en.wikipedia.org/wiki/AutoCAD_DXF) vector files to be imported by 3D modelling software.
+The final contours are experted as [AutoCAD DXF](https://en.wikipedia.org/wiki/AutoCAD_DXF) vector files to be imported by 3D modelling software. Output files for the [first](doc/tube0.dxf) and [second](doc/tube1.dxf).
