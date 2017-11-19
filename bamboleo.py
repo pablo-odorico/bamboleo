@@ -19,9 +19,9 @@ except ImportError as e:
     print(str(e) + '\nPlease install required packages with:\n  pip3 install opencv-python matplotlib numpy dxfwrite')
     sys.exit(1)
 
-
-# Global settings
-args = None
+# Module global state
+_dpi = 0
+_savePlots = False
 
 #
 # Utils
@@ -29,15 +29,17 @@ args = None
 
 # Units
 def dpi2dpcm(dpi): return dpi * 0.393701
-def px2cm(pixels): return pixels / dpi2dpcm(args.dpi)
+def px2cm(pixels): return pixels / dpi2dpcm(_dpi)
 def px2mm(pixels): return 10 * px2cm(pixels)
-def cm2px(cm): return cm * dpi2dpcm(args.dpi)
+def cm2px(cm): return cm * dpi2dpcm(_dpi)
 
 # Plotting
-figureCount = 0
+_figureCount = 0
+_figureDir = None
 class Figure:
     ''' Scope-based plotting util that will name and save figures in the output directory. '''
     def __init__(self, title='', filetype='png'):
+        assert _figureDir, 'Figure path not set'
         self.title = title
         self.filetype = filetype
     def __enter__(self):
@@ -47,12 +49,12 @@ class Figure:
             plt.title(self.title, loc='left')
             self.title = self.title.replace('\n', ' ')
     def __exit__(self, type, value, traceback):
-        global figureCount
-        path = os.path.join(args.output, f'figure_{figureCount}.{self.filetype}')
-        print(f'> Saving figure {figureCount}: {self.title}')
+        global _figureCount
+        path = os.path.join(_figureDir, f'figure_{_figureCount}.{self.filetype}')
+        print(f'> Saving figure {_figureCount}: {self.title}')
         plt.savefig(path, bbox_inches='tight', dpi=250)
         plt.close()
-        figureCount += 1
+        _figureCount += 1
 
 class Contour:
     ''' Wraps a contour obtained with findContours '''
@@ -155,7 +157,7 @@ def findTopLevelContours1(grayscale):
     for c in contours:
         c.points = cv2.convexHull(c.points)
 
-    if args.plots:
+    if _savePlots:
         with Figure('Background flood-fill mask'):
             plt.imshow(mask * 255, cmap='gray')
         with Figure('Filtered mask and detected tube rectangles'):
@@ -183,7 +185,7 @@ def findTopLevelContours2(grayscale):
     _, contourArray, treeArray = cv2.findContours(filteredMask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = getContours(contourArray, treeArray)
 
-    if args.plots:
+    if _savePlots:
         with Figure('Luminance histogram'):
             plt.axis('on'), plt.xticks([]), plt.yticks([])
             plt.hist(grayscale.ravel(), 128)
@@ -270,7 +272,7 @@ def extractTube(inputImage, contour, tubeId):
 
     print(f'* Found {len(topLevelContours)} top-level contours, {len(secondLevelContours)} sub-contours.')
 
-    if args.plots:
+    if _savePlots:
         with Figure(f'Tube {tubeId}: Graph-cuts input labels'):
             renderMask = np.zeros((h, w, 3), np.uint8)
             renderMask[mask == cv2.GC_FGD] = (0, 200, 0)
@@ -287,7 +289,7 @@ def extractTube(inputImage, contour, tubeId):
     odCm = px2cm(outsideContour.equivalentDiamater())
     idCm = px2cm(insideContour.equivalentDiamater())
     solidPerc = (outsideContour.area() - insideContour.area()) / outsideContour.area() * 100
-    with Figure(f'Tube {tubeId + 1}:\nOD = {odCm:.1f} cm, ID = {idCm:.1f} cm, {int(solidPerc)}% solid.'):
+    with Figure(f'Tube {tubeId}:\nOD = {odCm:.1f} cm, ID = {idCm:.1f} cm, {int(solidPerc)}% solid.'):
         render = tubeImage.copy()
         cv2.drawContours(render, [outsideContour.points], -1, (255, 0, 255), 2)
         cv2.drawContours(render, [insideContour.points], -1, (255, 255, 0), 2)
@@ -295,21 +297,35 @@ def extractTube(inputImage, contour, tubeId):
 
     return (outsideContour, insideContour, tubeImage)
 
-def main():
+def process(inputImagePath, outputDir, dpi, savePlots=False):
+    '''
+    Loads inputImagePath and extracts all the bamboo cross-sections.
+    Stores the cross section vector file and JSON file in outputDir.
+    If savePlots==True interemediate plots will be saevd to outputDir.
+    '''
+
+    global _dpi, _savePlots, _figureDir
+    _dpi = dpi
+    _savePlots = savePlots
+    _figureDir = outputDir
+
+    # Get absolute path out output dir, create if it doesn't exist
+    if not os.path.exists(outputDir):
+        os.makedirs(outputDir)
+    print(f'Output directory is "{outputDir}".')
+
     # Load image
-    inputImageBGR = cv2.imread(args.inputPath)
-    if inputImageBGR is None:
-        print(f'Failed to open image file "{args.inputPath}".')
-        return
+    inputImageBGR = cv2.imread(inputImagePath)
+    assert inputImageBGR is not None, f'Failed to open image file "{inputImagePath}".'
     inputHeight, inputWidth = inputImageBGR.shape[:2]
-    print(f'Loaded "{args.inputPath}": {inputWidth}x{inputHeight} px at {args.dpi} DPI is {px2cm(inputWidth):.1f}x{px2cm(inputHeight):.1f} cm.')
+    print(f'Loaded "{inputImagePath}": {inputWidth}x{inputHeight} px at {_dpi} DPI is {px2cm(inputWidth):.1f}x{px2cm(inputHeight):.1f} cm.')
 
     # Convert BGR to RGB
     inputImage = cv2.cvtColor(inputImageBGR, cv2.COLOR_BGR2RGB)
     # Convert to grayscale
     grayscale = cv2.cvtColor(inputImageBGR, cv2.COLOR_RGB2GRAY)
 
-    if args.plots:
+    if _savePlots:
         with Figure('Input image'):
             plt.imshow(inputImage)
 
@@ -351,17 +367,20 @@ def main():
             'outsideContour' : outsidePointsMM,
             'insideContour' : insidePointsMM
         }
-        jsonPath = os.path.join(args.output, f'tube_{tubeId}.json')
+        jsonPath = os.path.join(outputDir, f'tube_{tubeId}.json')
         open(jsonPath, 'w').write(json.dumps(jsonOut, indent=4))
 
         # Save contour DXF
-        dxfPath = os.path.join(args.output, f'tube_{tubeId}.dxf')
+        dxfPath = os.path.join(outputDir, f'tube_{tubeId}.dxf')
         drawing = dxf.drawing(dxfPath)
         drawing.header['$INSUNITS'] = 4 # Units are in mm
         drawing.header['$MEASUREMENT'] = 1 # Do measurements in metric
         drawing.add(dxf.polyline(points=outsidePointsMM, flags=dxfconst.POLYLINE_CLOSED))
         drawing.add(dxf.polyline(points=insidePointsMM, flags=dxfconst.POLYLINE_CLOSED))
         drawing.save()
+
+    print('Done.')
+    return jsonOut
 
 if __name__ == '__main__':
     # Parse command-line arguments
@@ -374,9 +393,5 @@ if __name__ == '__main__':
 
     # Default output dir is the same as the file without the extension
     args.output = args.output or os.path.splitext(args.inputPath)[0]
-    # Get absolute path out output dir, create if it doesn't exist
-    if not os.path.exists(args.output):
-        os.makedirs(args.output)
-    print(f'Output directory is "{args.output}".')
 
-    main()
+    process(inputImagePath=args.inputPath, outputDir=args.output, dpi=args.dpi, savePlots=args.plots)
